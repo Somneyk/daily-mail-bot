@@ -1,0 +1,102 @@
+import requests
+from bs4 import BeautifulSoup
+import time
+import asyncio
+from telegram import Bot
+import os
+
+# === НАСТРОЙКИ ===
+TOKEN = os.getenv("TELEGRAM_TOKEN", "8027287214:AAFmDK7QjA_Muzx0hDK56oIm5lpoM5ASsD4")
+CHAT_ID = int(os.getenv("CHAT_ID", "-1002596103738"))
+
+URL = "https://www.dailymail.co.uk"
+posted_urls = set()
+bot = Bot(token=TOKEN)
+
+def get_daily_mail_news():
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36'
+    }
+    try:
+        response = requests.get(URL, headers=headers, timeout=10)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, 'lxml')
+
+        articles = soup.select('article article a[href^="/"]')[:10]
+        news_list = []
+
+        for article in articles:
+            title_elem = article.find(['h2', 'h3']) or article.find_parent().find(['h2', 'h3'])
+            if not title_elem:
+                continue
+
+            title = title_elem.get_text(strip=True)
+            href = article.get('href')
+            if not href or len(title) < 10:
+                continue
+
+            full_url = "https://www.dailymail.co.uk" + href if href.startswith('/') else href
+            if full_url in posted_urls:
+                continue
+
+            img = article.find('img') or article.find_parent().find('img')
+            image_url = None
+            if img:
+                image_url = img.get('data-src') or img.get('srcset') or img.get('src')
+                if image_url and not image_url.startswith('http'):
+                    image_url = "https://www.dailymail.co.uk" + image_url
+
+            news_list.append({
+                "title": title,
+                "url": full_url,
+                "image": image_url
+            })
+            posted_urls.add(full_url)
+
+        return news_list
+
+    except Exception as e:
+        print(f"❌ Ошибка при парсинге Daily Mail: {e}")
+        return []
+
+async def send_news_to_telegram():
+    print("🔍 Проверяю новые новости на Daily Mail...")
+    news_list = get_daily_mail_news()
+    if not news_list:
+        print("📭 Новых новостей нет.")
+        return
+
+    for item in news_list:
+        message = f"🗞 *{item['title']}*\n\n[Читать полностью]({item['url']})"
+
+        try:
+            if item['image']:
+                await bot.send_photo(
+                    chat_id=CHAT_ID,
+                    photo=item['image'],
+                    caption=message,
+                    parse_mode='Markdown'
+                )
+            else:
+                await bot.send_message(
+                    chat_id=CHAT_ID,
+                    text=message,
+                    parse_mode='Markdown',
+                    disable_web_page_preview=False
+                )
+            print(f"✅ Успешно опубликовано: {item['title'][:50]}...")
+            await asyncio.sleep(2)
+
+        except Exception as e:
+            print(f"❌ Ошибка отправки в Telegram: {e}")
+
+async def main():
+    print("🤖 Бот запущен и готов к работе!")
+    print("⏱ Проверка новостей каждые 30 минут...")
+    while True:
+        await send_news_to_telegram()
+        print("💤 Ждём 30 минут до следующей проверки...\n")
+        await asyncio.sleep(1800)
+
+if __name__ == "__main__":
+    asyncio.run(main())
